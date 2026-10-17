@@ -254,7 +254,7 @@ check('c01 调度作业建单', s == 202 and len(job_id) == 12 and job_id != tic
       f's={s} body={body[:200]}')
 s, body, _ = http(f'http://10.66.0.36:8083/v1/jobs/{job_id}?sig={job_sig}')
 check('c01 作业 ETA 内返回 202', s == 202 and json.loads(body).get('state') == 'running')
-print('   ... 等待异步作业完成（约 300 秒）')
+print('   ... 等待异步作业完成（ETA 420 秒）')
 deadline = time.time() + 420
 blob = None
 while time.time() < deadline:

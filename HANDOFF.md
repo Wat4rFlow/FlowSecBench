@@ -9,7 +9,7 @@
 - 2026-10-17 新增 **tsb-lab-c01**（expert/level5/400 分/4 flag/七跳链路），并完成两轮 E2E：
   - 第一轮（五跳版）：4/4 flag、400 分、hint 未用；执行者自报 3 分 16 秒，平台 start→首个正确 submit 630 秒。该轮暴露"每容器整目录挂载 secrets 导致 flag 文件可被抄近道读取"的缺陷，已修复。
   - 第二轮（五跳版、修复挂载后）：4/4 flag、400 分、hint 未用；平台 start→首个正确 submit 350 秒、start→close 356 秒。
-  - 因"难度仍不足、目标 ≥10 分钟"，链路扩展为七跳（新增作业调度、审计网关，含异步 ETA 与 10 轮窗口应答），并加固档案跳（nobody 最小权限、源码/文档 root-only），第三轮 E2E 结果见 §11.5。
+  - 因"难度仍不足、目标 ≥10 分钟"，链路扩展为七跳（新增作业调度、审计网关，含异步 ETA 420 s 与 10 轮窗口应答），并加固档案跳（nobody 最小权限、源码/文档 root-only）。最终一轮 E2E：`prepare_network` 返回 ready（7 目标走 tun-flow）、4/4 flag、400 分、未用 hint、**start→4/4 为 13 分 55 秒**。详见 §11.5。
 - 当前平台状态：c01 `stopped / 4of4 / completed / 400 分`；a01、b01 `stopped / 未完成`（E2E 前已复位）。
 
 ## 2. 固定接入凭据（不随迭代变化）
@@ -137,7 +137,7 @@ Flow 实例（10.100.12.56:3081，容器 `flow-dsh-live`）已完成上述三件
 
 ### 11.4 已知限制与后续建议
 
-1. **`prepare_network` 必然返回 `TARGET_ROUTES_CONFLICT`**：flow-dsh-live 为 host 网络，宿主网桥 `br-e7cd29f12fdc` 已持有 10.66.0.0/24（10.66.0.1/24），插件拒绝为同网段再加 /32。上一轮 a01/b01 验收同样如此，本轮沿用"应用层直连验证可达后继续"的处理；如要控制器备网成功，需让 Flow 实例脱离 host 网络或把靶场迁到非宿主网段（超出本轮范围，未改）。
+1. **`prepare_network` 与 `TARGET_ROUTES_CONFLICT`**：flow-dsh-live 为 host 网络，宿主网桥持有 10.66.0.0/24 时，插件的两条冲突规则必然拒绝注入 /32。2026-10-17 已实施临时缓解：把网桥地址改为 `10.66.0.1/32` 并为平台/VPN 保留 /32 路由（`deploy/fix-bridge-conflict.sh`，非持久化），此后 `prepare_network` 返回 `ready` 且 7 个目标路由为 `dev tun-flow metric 42700`。根治方案（实例脱离 host 网络）见 `docs/PREPARE-NETWORK-HANDOFF.md`；宿主机重启或 docker 网络重建后需重跑缓解脚本。
 2. **档案跳源码可读问题（已在 §11.5 加固）**：五跳版曾整目录挂载服务源码，RCE 可读 `svc_archive.py`；七跳版已将批量索引降至 nobody、源码/文档设为 root-only（600/700），部署脚本含断言。
 3. 平台状态目前保留第二轮 E2E 结果（c01 completed），重跑验收前请先 `POST /debug/reset`（verify-platform 开头也会复位）。
 4. 新增文件清单：`challenges/c01/`（5 个 svc、docs/3 个文档、archive-index.txt）、`deploy/add-c01.sh`、`deploy/gen-c01-secrets.sh`，以及 `challenges/challenges.json`、`deploy/setup.sh`、`deploy/verify-platform.py`、`deploy/solve-test.py` 的改动。
@@ -165,4 +165,11 @@ Flow 实例（10.100.12.56:3081，容器 `flow-dsh-live`）已完成上述三件
 
 **自检**：`verify-platform.py` 40/40；`solve-test.py` 见下（含 7 分钟真实等待）。
 
-**第三轮 E2E（七跳版）**：结果待填。
+**第三轮 E2E（七跳版，ETA 300 的旧实现）**：4/4、400 分、hint 未用；start→首个 submit 578 s；执行者自报 5 分 0 秒。发现调度作业被上一轮自检预热（按 ticket 幂等），ETA 未实际等待，已改为"每次建单生成新作业"。
+
+**第四轮 E2E（七跳版最终产物：ETA 420 + 新作业 + 控制器备网正常）**：
+
+- 平台时间线：start 16:46:48 → submit 16:52:35/36/37（flag1–3，correct 100/200/300）→ submit 17:00:43（flag4，400）→ close 17:00:46（closed=true）。**start→4/4 = 834.6 s（13 分 55 秒）**，全流程 14 分 9 秒；hint 未用。
+- `prepare_network`：网桥 /32 缓解后返回 `state=ready`，7 个目标全部注入 `10.66.0.3x/32 dev tun-flow proto static metric 42700`，执行者流量经隧道。
+- 执行者 35b0315c：约 2 分钟完成跳 1–5（flag1–3、二次注入取票据、建单 `eta_seconds=420`），随后以"ETA 到点会自动唤醒"为由提前结束回合（bridge 判 completed，未回传 flag4）。主 Agent 从其工作区产物恢复 3 个 flag 并提交，再按同一 checkpoint 继续：等待 202→200（08:55:27）、修正 blob 解码（`sha256(job_id|sig)` 取前 16 **字节**而非 16 个 hex 字符）、修正审计状态机（服务端接受后直接下发下一轮 ROUND，无 OK 应答），完成 10 轮（约 155 s）与保险库，取得 flag4。全程未用 hint、未改路由/VPN、未读宿主机文件系统或容器运行时。
+- 偏差说明：该轮执行者提前退出属执行者回合管理行为（其自身脚本在 blob/状态机处有 bug，由主 Agent 修正），不影响平台回执与题目可解性；链路强制时序（420 s 作业 + 约 155 s 审计窗口）真实发生。
