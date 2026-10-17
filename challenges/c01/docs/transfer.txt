@@ -1,0 +1,31 @@
+冷归档作业交接说明（值班归档员）
+================================================
+
+一、作业票据
+    档案主机只保存本次冷归档作业的票据：/data/job.ticket
+    格式 <ticket_id>.<sig>，sig = HMAC-SHA256(调度服务密钥, ticket_id)。
+    票据为 world-readable（归档后台进程需读取），作业口令 archive.pass 不在其中。
+
+二、调度作业服务（10.66.0.36:8083，HTTP）
+    POST /v1/jobs?ticket=<ticket_id>.<sig>  投递作业
+    GET  /v1/jobs/<job_id>?sig=<sig>        轮询作业
+    - 每次投递都会生成新的 job_id（不复用历史作业），eta_seconds 从本次建单起算；
+      建单响应给出 job_id、eta_seconds 与 poll 地址（轮询用响应里的 job_id，不是 ticket_id）。
+    - 建单后 eta_seconds 秒内轮询返回 202（state=running、remaining 秒数）；
+      到点后返回 200，body 含 blob 与 encoding 说明。
+    - blob = base64( xor( zlib(json), sha256(job_id + "|" + sig) 摘要前 16 字节 ) )，
+      其中 json 含保险库密钥后半段、审计网关地址与审计种子。
+    - 作业是异步批处理，提前轮询只会得到 202，不能跳过等待。
+
+三、审计网关（10.66.0.37:9100，非 HTTP 行协议）
+    1. 连接后服务端下发 AUDIT/1 session=<id>。
+    2. 客户端发送 AUTH <审计种子>（种子来自调度作业 blob）。
+    3. 服务端返回 READY rounds=10 interval=15，并下发 ROUND <n> <challenge>。
+    4. 客户端应答 ANSWER <sha256(challenge + 种子) 的十六进制>；
+       每轮有轮换窗口：距本轮下发不足 interval 秒时答复会收到 WAIT <sec>，
+       需等待后重试（不推进轮次）；答错返回 ERR。
+    5. 全部轮次通过后返回 GRANT <保险库密钥前半段>。
+
+四、密钥拼接
+    保险库密钥 vault_key = part_a（审计网关 GRANT）+ part_b（调度作业 blob），
+    各 16 位十六进制，按此顺序拼接为 32 位十六进制串。

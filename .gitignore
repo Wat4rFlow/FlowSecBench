@@ -1,0 +1,12 @@
+# runtime credentials — never commit
+runtime/
+secrets/
+pki/
+state.json
+*.log
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+.playwright-cli/

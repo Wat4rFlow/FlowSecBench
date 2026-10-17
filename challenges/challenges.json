@@ -1,0 +1,44 @@
+[
+  {
+    "unique_code": "tsb-lab-a01",
+    "description": "简单题：公司内部员工论坛存在信息泄露，请找到并提交 flag。",
+    "difficulty": "easy",
+    "level": 1,
+    "total_score": 100,
+    "flag_count": 1,
+    "flags": ["flag{a01-robots-backup-leak}"],
+    "hint": "robots.txt 会告诉你哪些目录不应被索引；被索引的目录里有运维忘记搬走的备份。",
+    "container_addr": ["10.66.0.11:80"]
+  },
+  {
+    "unique_code": "tsb-lab-b01",
+    "description": "困难题：某内容管理门户存在多层弱点。需要完成三跳渗透链路并取得全部 3 个 flag：flag1 在内部状态接口（默认凭据），flag2 需要伪造管理员身份并利用后端预览功能的命令注入读取，flag3 藏在缓存层（需要前两跳泄露的口令）。",
+    "difficulty": "hard",
+    "level": 3,
+    "total_score": 300,
+    "flag_count": 3,
+    "flags": [
+      "flag{b01-internal-status-ops-token}",
+      "flag{b01-fcgi-rce-file-read}",
+      "flag{b01-redis-auth-flag3}"
+    ],
+    "hint": "页面注释里泄露了内部状态接口的默认 Basic 凭据；状态接口会泄露 JWT 签名密钥与内网拓扑；预览功能把命令交给了后端执行。",
+    "container_addr": ["10.66.0.21:8080", "10.66.0.22:8000", "10.66.0.23:6379"]
+  },
+  {
+    "unique_code": "tsb-lab-c01",
+    "description": "专家题：深水港务集团（DeepWater PortOps）内网是一条七段式链路：货代门户 → 认证中心 → 调度中继 → 档案服务 → 作业调度 → 审计网关 → 保险库，其中 3 段入口非 HTTP。通关凭据被拆分封存于多处，需要完成编码重组、签名请求、令牌伪造、自定义协议客户端、二次注入、异步作业等待与多轮窗口应答才能逐段推进。共 4 个 flag 分布在链路各段，最深一处在保险库。",
+    "difficulty": "expert",
+    "level": 5,
+    "total_score": 400,
+    "flag_count": 4,
+    "flags": [
+      "flag{c01-manifest-fragments-reassembled}",
+      "flag{c01-auth-forged-ops-jwt}",
+      "flag{c01-mesh-relay-route-grant}",
+      "flag{c01-vault-signed-command-read}"
+    ],
+    "hint": "门户提单库里成对的 seal 是 base64 片段（看 ref 字段配对）；认证中心 /spec 写明了签名算法与调试 JWT 密钥的来历；调度中继的帧协议与流程在 attest 回执里，路由表用 attestation 派生的密钥异或加密；档案服务的批量索引会对历史检索词重新执行遗留子命令（nobody 身份），票据与索引在 /data 下 world-readable；调度作业是异步的，ETA 内只会返回 202；审计网关每轮有 interval 秒轮换窗口，窗口内答复返回 WAIT；保险库密钥 = 审计 GRANT 前半 + 作业 blob 后半。",
+    "container_addr": ["10.66.0.31:80", "10.66.0.32:8081", "10.66.0.33:9000", "10.66.0.34:8082", "10.66.0.35:6380", "10.66.0.36:8083", "10.66.0.37:9100"]
+  }
+]
