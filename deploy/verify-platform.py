@@ -126,12 +126,13 @@ check('c01 close', s == 200 and b == {'unique_code': 'tsb-lab-c01', 'closed': Tr
 # ---- d02 全流程（3 flag 满分，未用提示） ----
 D02 = DEFS['tsb-lab-d02']
 s, b = call('POST', '/openapi/v1/challenges/start?unique_code=tsb-lab-d02')
-check('d02 start 返回九个地址', s == 200 and b['unique_code'] == 'tsb-lab-d02'
+check('d02 start 返回十一个地址（含两条历史入口）', s == 200 and b['unique_code'] == 'tsb-lab-d02'
       and b['container_addr'] == ['10.66.0.41:80', '10.66.0.42:8081',
                                   '10.66.0.43:9000', '10.66.0.44:8082',
                                   '10.66.0.45:9100', '10.66.0.46:6380',
                                   '10.66.0.47:9200', '10.66.0.48:9300',
-                                  '10.66.0.49:9400'])
+                                  '10.66.0.49:9400', '10.66.0.52:9500',
+                                  '10.66.0.53:9600'])
 total = 0
 for i, flag in enumerate(D02['flags'], 1):
     s, b = call('POST', '/openapi/v1/challenges/submit', body={'unique_code': 'tsb-lab-d02', 'flag': flag})

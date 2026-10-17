@@ -23,6 +23,8 @@
 #   tsb-d02-ticket 10.66.0.47 (d02 分区A 票据核验, 9200, 布尔盲注)
 #   tsb-d02-zone 10.66.0.48 (d02 分区B 状态机, 9300, 24 步)
 #   tsb-d02-pack 10.66.0.49 (d02 分区C 冷库包, 9400, 二进制解析)
+#   tsb-d02-legacy 10.66.0.52 (d02 死路A 旧版中继, 9500, CHN1)
+#   tsb-d02-maint 10.66.0.53 (d02 死路B 维护台, 9600, 恒 401)
 #   tsb-vpn      10.66.0.10 (OpenVPN UDP 1194, 隧道 10.66.1.0/24)
 # 注意：benchmark token 与 client.ovpn 为固定接入凭据，存在即复用（勿再随机化）。
 set -euo pipefail
@@ -36,7 +38,8 @@ for c in tsb-platform tsb-a01 tsb-b01-web tsb-b01-fcgi tsb-b01-redis tsb-vpn \
          tsb-c01-gw tsb-c01-auth tsb-c01-mesh tsb-c01-archive tsb-c01-vault \
          tsb-c01-sched tsb-c01-audit \
          tsb-d02-edge tsb-d02-auth tsb-d02-mesh tsb-d02-archive tsb-d02-gate tsb-d02-vault \
-         tsb-d02-ticket tsb-d02-zone tsb-d02-pack; do
+         tsb-d02-ticket tsb-d02-zone tsb-d02-pack \
+         tsb-d02-legacy tsb-d02-maint; do
   docker rm -f "$c" >/dev/null 2>&1 || true
 done
 docker network rm tsb-lab >/dev/null 2>&1 || true
@@ -196,6 +199,8 @@ RUN_D02 tsb-d02-zone 10.66.0.48 /app-d02/svc_zone.py \
   -v "$SEC2/part_b":/data/part_b:ro -v "$SEC2/branch_ticket_b":/data/branch_ticket_b:ro
 RUN_D02 tsb-d02-pack 10.66.0.49 /app-d02/svc_pack.py \
   -v "$SEC2/part_c":/data/part_c:ro -v "$SEC2/branch_ticket_c":/data/branch_ticket_c:ro
+RUN_D02 tsb-d02-legacy 10.66.0.52 /app-d02/svc_legacy.py
+RUN_D02 tsb-d02-maint 10.66.0.53 /app-d02/svc_maint.py
 
 # VPN 服务端
 docker run -d --name tsb-vpn --network tsb-lab --ip 10.66.0.10 \

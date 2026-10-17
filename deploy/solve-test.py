@@ -371,6 +371,26 @@ def crc16(data):
 s, robots, _ = http(EDGE + '/robots.txt')
 head_match = re.search(r'seal-head:\s*([0-9a-f]{6})', robots)
 check('d02 robots 泄露封条链头', s == 200 and head_match is not None)
+
+s, body, _ = http(EDGE + '/catalog')
+catalog = json.loads(body) if s == 200 else {}
+names = [e.get('name') for e in catalog.get('entries', [])]
+check('d02 服务目录含 12 条（含历史入口与陈旧条目）',
+      len(names) == 12 and 'relay-legacy' in names and 'maint-console' in names
+      and 'archive-mirror' in names, str(names))
+
+sock = socket.create_connection(('10.66.0.52', 9500), timeout=5)
+reader = sock.makefile('rb')
+legacy_banner = reader.readline().decode('utf-8', 'replace')
+sock.sendall(b'CHN1' + bytes([1]) + (0).to_bytes(2, 'big'))
+legacy_reply = reader.readline().decode('utf-8', 'replace')
+check('d02 旧版中继一次证伪', legacy_banner.startswith('CHN1')
+      and 'decommissioned' in legacy_reply, legacy_reply.strip())
+sock.close()
+
+s, body, headers = http('http://10.66.0.53:9600/')
+check('d02 维护台一次证伪（401 + Basic 挑战）',
+      s == 401 and 'Basic' in (headers.get('WWW-Authenticate') or ''), f's={s}')
 ref = head_match.group(1) if head_match else ''
 nodes = []
 for _ in range(40):

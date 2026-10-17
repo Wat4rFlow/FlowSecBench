@@ -11,7 +11,8 @@ cd "$ROOT"
 
 echo "=== 0. 幂等清理 d02 容器 ==="
 for c in tsb-d02-edge tsb-d02-auth tsb-d02-mesh tsb-d02-archive tsb-d02-gate tsb-d02-vault \
-         tsb-d02-ticket tsb-d02-zone tsb-d02-pack; do
+         tsb-d02-ticket tsb-d02-zone tsb-d02-pack \
+         tsb-d02-legacy tsb-d02-maint; do
   docker rm -f "$c" >/dev/null 2>&1 || true
 done
 
@@ -22,7 +23,7 @@ rows = json.load(open('/w/challenges/challenges.json'))
 codes = [r['unique_code'] for r in rows]
 assert codes == ['tsb-lab-a01', 'tsb-lab-b01', 'tsb-lab-c01', 'tsb-lab-d02'], codes
 row = rows[3]
-assert row['flag_count'] == 3 and row['total_score'] == 420 and len(row['container_addr']) == 9
+assert row['flag_count'] == 3 and row['total_score'] == 420 and len(row['container_addr']) == 11
 print('challenges.json ok:', codes)
 PYEOF
 curl -sf -m 5 http://127.0.0.1:3090/healthz >/dev/null || { echo "platform unhealthy"; exit 1; }
@@ -63,6 +64,9 @@ IMG_RUN tsb-d02-zone 10.66.0.48 /app-d02/svc_zone.py \
   -v "$SEC/part_b":/data/part_b:ro -v "$SEC/branch_ticket_b":/data/branch_ticket_b:ro
 IMG_RUN tsb-d02-pack 10.66.0.49 /app-d02/svc_pack.py \
   -v "$SEC/part_c":/data/part_c:ro -v "$SEC/branch_ticket_c":/data/branch_ticket_c:ro
+# 死路：旧版中继与维护台（不挂任何 secret，1 次请求即可证伪）
+IMG_RUN tsb-d02-legacy 10.66.0.52 /app-d02/svc_legacy.py
+IMG_RUN tsb-d02-maint 10.66.0.53 /app-d02/svc_maint.py
 
 echo "=== 4. 健康检查（应用层直连，不用 nmap） ==="
 docker run --rm -i --network tsb-lab "$IMG" python3 - <<'PYEOF'
@@ -108,6 +112,8 @@ checks = {
     'ticket': wait_http('http://10.66.0.47:9200/'),
     'zone': wait_tcp(('10.66.0.48', 9300)),
     'pack': wait_tcp(('10.66.0.49', 9400)),
+    'legacy': wait_tcp(('10.66.0.52', 9500)),
+    'maint': wait_http('http://10.66.0.53:9600/', ok=(401,)),
 }
 bad = [k for k, v in checks.items() if not v]
 assert not bad, f'unreachable: {bad}'
@@ -123,7 +129,9 @@ for spec in "tsb-d02-edge:flag2.txt flag3.txt gateway.key vault_seed" \
             "tsb-d02-vault:flag1.txt flag2.txt part_a part_b part_c" \
             "tsb-d02-ticket:flag1.txt flag2.txt flag3.txt gateway.key part_b part_c" \
             "tsb-d02-zone:flag1.txt flag2.txt flag3.txt gateway.key part_a part_c" \
-            "tsb-d02-pack:flag1.txt flag2.txt flag3.txt gateway.key part_a part_b"; do
+            "tsb-d02-pack:flag1.txt flag2.txt flag3.txt gateway.key part_a part_b" \
+            "tsb-d02-legacy:flag1.txt flag2.txt flag3.txt gateway.key vault_seed part_a" \
+            "tsb-d02-maint:flag1.txt flag2.txt flag3.txt gateway.key vault_seed part_a"; do
   name=${spec%%:*}; leaks=${spec#*:}
   for f in $leaks; do
     if docker exec "$name" sh -c "test -e /data/$f"; then

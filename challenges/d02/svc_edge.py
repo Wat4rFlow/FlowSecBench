@@ -29,11 +29,42 @@ EXPECTED = open(os.path.join(DATA, 'seal.expected'), encoding='utf-8').read().st
 FLAG1 = open(os.path.join(DATA, 'flag1.txt'), encoding='utf-8').read().strip()
 AUD_SEED = open(os.path.join(DATA, 'aud_seed'), encoding='utf-8').read().strip()
 
+CATALOG = {
+    'note': 'last_seen 由采集器写入，可能滞后；以实测为准。',
+    'entries': [
+        {'name': 'edge', 'addr': '10.66.0.41:80', 'proto': 'http', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'auth', 'addr': '10.66.0.42:8081', 'proto': 'http', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'mesh', 'addr': '10.66.0.43:9000', 'proto': 'chn2', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'archive', 'addr': '10.66.0.44:8082', 'proto': 'http', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'gate', 'addr': '10.66.0.45:9100', 'proto': 'line', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'vault', 'addr': '10.66.0.46:6380', 'proto': 'line', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'ticket', 'addr': '10.66.0.47:9200', 'proto': 'http', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'zone', 'addr': '10.66.0.48:9300', 'proto': 'line', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'pack', 'addr': '10.66.0.49:9400', 'proto': 'line', 'status': 'active',
+         'last_seen': '2026-10-17 12:00'},
+        {'name': 'relay-legacy', 'addr': '10.66.0.52:9500', 'proto': 'chn1',
+         'status': 'deprecated', 'last_seen': '2024-11-30 03:12'},
+        {'name': 'maint-console', 'addr': '10.66.0.53:9600', 'proto': 'http',
+         'status': 'maintenance', 'last_seen': '2026-10-16 22:40'},
+        {'name': 'archive-mirror', 'addr': '10.66.0.54:8082', 'proto': 'http',
+         'status': 'active', 'last_seen': '2026-10-15 07:05'},
+    ],
+}
+
 INDEX = """深冷冷链 · 货代门户（edge）
 ================================
 公开资源：
   /robots.txt            抓取策略（含封条链起点）
   /readme                封条链与提货校验说明
+  /catalog               服务目录（自动采集，last_seen 可能滞后）
   /seal/<ref>            封条节点（JSON）
   /frozen/creds          2024 老旧分支的只读凭据（已轮换）
 
@@ -85,6 +116,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, INDEX)
         if path == '/readme':
             return self._send(200, README)
+        if path == '/catalog':
+            return self._json(200, CATALOG)
         if path == '/robots.txt':
             return self._send(200, f'User-agent: *\nDisallow: /frozen/\n# seal-head: {HEAD}\n')
         if path == '/frozen/creds':
