@@ -8,8 +8,8 @@
   /redeem?proof=       校验拼接摘要，返回 flag1 + 认证中心种子
 
 链头之后每个节点的 next 只有两种来源：直接给出（干扰节点），或由
-sha256(part)[:6] 计算（保留节点）——必须逐节点推进，且部分分片需按
-节点号异或还原。仅 Python 标准库。
+分片摘要派生（保留节点）——必须逐节点推进，部分分片还需按节点号还原。
+具体算法见题目设计文档，不在服务内明文。仅 Python 标准库。
 """
 import base64
 import hashlib
@@ -44,21 +44,16 @@ INDEX = """深冷冷链 · 货代门户（edge）
 README = """封条链运维说明（edge）
 ================================
 1) 封条链起点：robots.txt 中 seal-head 的 ref。逐个 GET /seal/<ref> 取节点。
-2) 节点字段：
-     node       节点序号（0 起）
-     part       base64 编码的 12 字节分片
-     tag        K = 保留分片，D = 干扰分片
-     next       下一节点 ref（仅干扰节点直接给出）
-     next_hint  保留节点不直接给出 next，其值 = sha256(part 字符串) 前 6 位十六进制
-3) 组装规则：
-   - 取所有 tag=K 的节点，按 node 升序；
-   - 每个 part 先 base64 解码；
-   - 若 node % 9 == 0，解码后的每个字节需与 node 异或（node=0 时不变）；
+2) 节点字段：node（序号）/ part（base64 分片）/ tag（K 保留、D 干扰）/ next / next_hint。
+   - 干扰节点直接给 next；
+   - 保留节点不给 next：其 6 位十六进制 ref 由 part 的摘要派生（摘要算法需自行确认）。
+3) 组装：
+   - 取全部 tag=K 节点，按 node 升序；
+   - part 先 base64 解码；node 能被 9 整除的分片，解码结果需与节点号做一次
+     可逆运算（运算方式需自行确认，可用最终摘要自校验）；
    - 按顺序拼接全部分片字节。
-4) 提货校验：
-   proof = sha256(拼接结果) 的十六进制前 32 位
-   GET /redeem?proof=<proof>
-   校验通过返回 flag1、认证中心种子与地址。
+4) 提货校验：proof = sha256(拼接字节) 的十六进制前 32 位，
+   GET /redeem?proof=<proof> 通过后返回 flag1、认证中心种子与地址。
 
 /frozen/ 为 2024 年旧版只读分支，凭据已轮换，仅用于排障对照。
 """

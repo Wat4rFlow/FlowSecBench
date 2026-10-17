@@ -85,7 +85,7 @@ SPEC = {
             'nonce': '16 位小写十六进制，一次性',
         },
         'payload_key_order': ['sub', 'role', 'scope', 'exp', 'nonce'],
-        'signing_key': "sha256(aud_seed + '|' + kid) 的十六进制串前 32 位，按其 ASCII 字节作为 HMAC-SHA256 密钥",
+        'signing_key': '由 aud_seed 与 kid 派生（SHA-256，取 32 个 ASCII 字符作为 HMAC 密钥；具体拼接方式需自行确认）',
         'canonical': 'header 与 payload 各自 JSON 紧凑序列化（分隔符 "," 与 ":"，无空格，保留键序），分别 b64url 去 padding 后以 "." 连接签名',
         'exp_window_seconds': WINDOW,
         'sample_token': SAMPLE_TOKEN,

@@ -3,7 +3,7 @@
 
 自定义二进制帧协议 CHN2，连接后先下发一行协议提示，再进入帧循环：
   帧 = b'CHN2' + type:u8 + len:u16be + crc16:u16be + payload
-  crc16 为 CCITT-FALSE（init 0xFFFF, poly 0x1021），覆盖 type|len|payload
+  crc16 的具体变体不在服务内明文（需按常见变体尝试）。
   1 HELLO(payload='MESH1'+seed) → 2 CHALLENGE(nonce8|mask8)
   3 RESP(xor(sha256(nonce+seed)[:8], mask)) → 4 OPEN(sid4|blob512)
   5 ROUTE(code4|digest8) → 7 GRANT(json)
@@ -26,12 +26,13 @@ GATE_ADDR = '10.66.0.45:9100'
 BLOB_LEN = 512
 
 BANNER = (b'CHN2 relay | frame=magic(CHN2)+type:u8+len:u16be+crc16:u16be '
-          b'(CCITT-FALSE over type|len|payload)+payload | '
+          b'(crc variant is NOT documented; covers type|len|payload)+payload | '
           b'1=HELLO(MESH1+seed) 2=CHALLENGE(nonce8|mask8) '
           b'3=RESP(xor(sha256(nonce|seed)[:8],mask)) 4=OPEN(sid4|blob512) '
           b'5=ROUTE(code4|digest8) 7=GRANT(json) 6=ERROR(text) | '
-          b'blob=xor(json padded to 512, sha256(sid|seed)[:16] repeated) | '
-          b'route digest = sha256(sid|code|seed)[:16] hex; stale entries fail\n')
+          b'blob = padded JSON XOR a keystream derived from sid and seed | '
+          b'route digest must be recomputed from the same derivation; '
+          b'exactly one entry is consistent\n')
 
 
 def crc16(data: bytes) -> int:

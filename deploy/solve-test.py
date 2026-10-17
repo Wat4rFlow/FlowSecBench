@@ -229,9 +229,9 @@ archive_auth = 'archivist:' + part_a + part_b
 s, body, _ = http('http://10.66.0.34:8082/docs', auth=archive_auth)
 check('c01 组合口令进档案服务', s == 200 and 'transfer.txt' in body, f's={s}')
 s, body, _ = http('http://10.66.0.34:8082/docs/view?name=vault-ops.txt', auth=archive_auth)
-check('c01 保险库规范文档可读', s == 200 and 'HMAC-SHA256' in body and 'part_a' in body)
+check('c01 保险库规范文档可读', s == 200 and 'HMAC-SHA256' in body and 'vault_key' in body)
 s, body, _ = http('http://10.66.0.34:8082/docs/view?name=transfer.txt', auth=archive_auth)
-check('c01 作业交接文档可读', s == 200 and '/v1/jobs' in body and 'GRANT' in body)
+check('c01 作业交接文档可读', s == 200 and '/v1/jobs' in body and 'vault_key' in body)
 inject = "x' ; cat /data/job.ticket ; echo '"
 s, body, _ = http('http://10.66.0.34:8082/search', auth=archive_auth,
                   data=('q=' + urllib.parse.quote(inject)).encode())
@@ -440,7 +440,7 @@ pass_a = attest.get('archive_pass_a', '')
 sock = socket.create_connection(('10.66.0.43', 9000), timeout=10)
 reader = sock.makefile('rb')
 banner = reader.readline().decode('utf-8', 'replace')
-check('d02 中继下发 CHN2 协议提示', banner.startswith('CHN2') and 'CCITT-FALSE' in banner)
+check('d02 中继下发 CHN2 协议提示', banner.startswith('CHN2') and 'crc16' in banner)
 
 
 def mesh_send(ftype, data=b''):

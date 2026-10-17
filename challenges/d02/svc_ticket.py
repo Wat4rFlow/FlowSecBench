@@ -32,9 +32,8 @@ INDEX = """冷库分区 A · 票据核验（10.66.0.47:9200）
 GET /verify?t=<分区票据>&code=<票据码>   布尔查询（只回 match）
 GET /claim?t=<分区票据>&code=<票据码>    精确比对，成功返回种子片段
 
-实现说明：/verify 使用 SQLite 内存库，查询语句按
-  SELECT 1 FROM tickets WHERE code = '<code>' LIMIT 1
-直接拼接后执行（2024 年遗留实现，未参数化）。
+实现说明：/verify 为 2024 年遗留的布尔核验接口（未参数化），
+查询异常时统一返回 match=false。
 """
 
 

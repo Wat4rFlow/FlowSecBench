@@ -27,8 +27,9 @@ TICKET = open(os.path.join(DATA, 'branch_ticket_c'), encoding='utf-8').read().st
 
 BANNER = b'+PACK CTRL1\r\n+NEED TICKET\r\n'
 RULE = ('+RULE header=CSPK+ver u8+count u16be; record=id u8,flags u8,size u8,'
-        'crc8 u8,payload; flags bit0=valid bit1=deleted; crc8 poly=0x07 init=0; '
-        'pick the highest id among valid & not deleted & crc-matched records')
+        'crc8 u8,payload; flags bit0=valid bit1=deleted; crc8 polynomial/init '
+        'are NOT documented; pick the highest id among valid & not deleted & '
+        'crc-matched records')
 
 
 def crc8(data: bytes) -> int:
