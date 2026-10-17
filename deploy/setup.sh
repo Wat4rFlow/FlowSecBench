@@ -1,5 +1,5 @@
 #!/bin/bash
-# TSB Lab 一键部署：平台 + 三道题靶场（a01/b01/c01）+ VPN 服务
+# TSB Lab 一键部署：平台 + 四道题靶场（a01/b01/c01/d02）+ VPN 服务
 # 拓扑（宿主机 10.100.12.56）：
 #   docker 网络 tsb-lab = 10.66.0.0/24
 #   tsb-platform 10.66.0.2  (宿主 3090 端口)
@@ -14,6 +14,15 @@
 #   tsb-c01-vault 10.66.0.35 (c01 保险库, 6380, 签名 RESP)
 #   tsb-c01-sched 10.66.0.36 (c01 调度作业, 8083, 异步 ETA 420s)
 #   tsb-c01-audit 10.66.0.37 (c01 审计网关, 9100, 10 轮×15s 窗口)
+#   tsb-d02-edge 10.66.0.41 (d02 货代门户, 80, 30 节点封条链)
+#   tsb-d02-auth 10.66.0.42 (d02 认证中心, 8081, JWT + 6 轮应答)
+#   tsb-d02-mesh 10.66.0.43 (d02 调度中继, 9000, CHN2 二进制帧)
+#   tsb-d02-archive 10.66.0.44 (d02 归档服务, 8082, 单次过滤穿越)
+#   tsb-d02-gate 10.66.0.45 (d02 冷库网关, 9100, 12 轮 HMAC 阶梯)
+#   tsb-d02-vault 10.66.0.46 (d02 保险库, 6380, 计数器绑定签名)
+#   tsb-d02-ticket 10.66.0.47 (d02 分区A 票据核验, 9200, 布尔盲注)
+#   tsb-d02-zone 10.66.0.48 (d02 分区B 状态机, 9300, 24 步)
+#   tsb-d02-pack 10.66.0.49 (d02 分区C 冷库包, 9400, 二进制解析)
 #   tsb-vpn      10.66.0.10 (OpenVPN UDP 1194, 隧道 10.66.1.0/24)
 # 注意：benchmark token 与 client.ovpn 为固定接入凭据，存在即复用（勿再随机化）。
 set -euo pipefail
@@ -25,7 +34,9 @@ cd "$ROOT"
 echo "=== 0. 幂等清理 ==="
 for c in tsb-platform tsb-a01 tsb-b01-web tsb-b01-fcgi tsb-b01-redis tsb-vpn \
          tsb-c01-gw tsb-c01-auth tsb-c01-mesh tsb-c01-archive tsb-c01-vault \
-         tsb-c01-sched tsb-c01-audit; do
+         tsb-c01-sched tsb-c01-audit \
+         tsb-d02-edge tsb-d02-auth tsb-d02-mesh tsb-d02-archive tsb-d02-gate tsb-d02-vault \
+         tsb-d02-ticket tsb-d02-zone tsb-d02-pack; do
   docker rm -f "$c" >/dev/null 2>&1 || true
 done
 docker network rm tsb-lab >/dev/null 2>&1 || true
@@ -54,6 +65,8 @@ else
 fi
 # c01 secrets（flag 单一来源 challenges.json + 部署期随机密钥/口令分段）
 bash deploy/gen-c01-secrets.sh
+# d02 secrets（六跳冷链路：封条链节点表 + 各跳密钥/种子）
+bash deploy/gen-d02-secrets.sh
 chmod 600 secrets/b01/redis.auth secrets/benchmark.token secrets/a01.flag secrets/b01/flag*.txt
 
 echo "=== 2. 生成 PKI（存在即复用，保持 client.ovpn 内容不变） ==="
@@ -149,6 +162,40 @@ RUN_C01 tsb-c01-audit 10.66.0.37 /app-c01/svc_audit.py \
   -v "$SEC/audit_seed":/data/audit_seed:ro -v "$SEC/vault_part_a":/data/vault_part_a:ro
 RUN_C01 tsb-c01-vault 10.66.0.35 /app-c01/svc_vault.py \
   -v "$SEC/flag4.txt":/data/flag4.txt:ro -v "$SEC/vault.key":/data/vault.key:ro
+
+# d02：六段式冷链路（门户/认证/中继/归档/网关/保险库），零等待、纯工作量
+RUN_D02() {  # $1=name $2=ip $3=svc；其余为 -v 挂载参数
+  local name=$1 ip=$2 svc=$3; shift 3
+  docker run -d --name "$name" --network tsb-lab --ip "$ip" \
+    --cap-add NET_ADMIN --memory 128m --memory-swap 128m \
+    -v "$ROOT/challenges/d02":/app-d02:ro \
+    "$@" \
+    "$IMG" sh -c "ip route add 10.66.1.0/24 via 10.66.0.10; exec python3 -u $svc" >/dev/null
+}
+SEC2="$ROOT/secrets/d02"
+RUN_D02 tsb-d02-edge 10.66.0.41 /app-d02/svc_edge.py \
+  -v "$SEC2/flag1.txt":/data/flag1.txt:ro -v "$SEC2/nodes.json":/data/nodes.json:ro \
+  -v "$SEC2/seal.expected":/data/seal.expected:ro -v "$SEC2/aud_seed":/data/aud_seed:ro
+RUN_D02 tsb-d02-auth 10.66.0.42 /app-d02/svc_auth.py \
+  -v "$SEC2/aud_seed":/data/aud_seed:ro -v "$SEC2/mesh_seed":/data/mesh_seed:ro \
+  -v "$SEC2/archive_pass_a":/data/archive_pass_a:ro
+RUN_D02 tsb-d02-mesh 10.66.0.43 /app-d02/svc_mesh.py \
+  -v "$SEC2/mesh_seed":/data/mesh_seed:ro -v "$SEC2/archive_pass_b":/data/archive_pass_b:ro
+RUN_D02 tsb-d02-archive 10.66.0.44 /app-d02/svc_archive.py \
+  -v "$SEC2/archive.pass":/data/archive.pass:ro -v "$SEC2/gateway.key":/data/gateway.key:ro \
+  -v "$SEC2/flag2.txt":/data/flag2.txt:ro -v "$SEC2/branches.json":/data/branches.json:ro
+RUN_D02 tsb-d02-gate 10.66.0.45 /app-d02/svc_gate.py \
+  -v "$SEC2/gateway.key":/data/gateway.key:ro -v "$SEC2/gate_seed":/data/gate_seed:ro \
+  -v "$SEC2/vault_seed":/data/vault_seed:ro
+RUN_D02 tsb-d02-vault 10.66.0.46 /app-d02/svc_vault.py \
+  -v "$SEC2/gateway.key":/data/gateway.key:ro -v "$SEC2/vault_seed":/data/vault_seed:ro \
+  -v "$SEC2/flag3.txt":/data/flag3.txt:ro
+RUN_D02 tsb-d02-ticket 10.66.0.47 /app-d02/svc_ticket.py \
+  -v "$SEC2/part_a":/data/part_a:ro -v "$SEC2/branch_ticket_a":/data/branch_ticket_a:ro
+RUN_D02 tsb-d02-zone 10.66.0.48 /app-d02/svc_zone.py \
+  -v "$SEC2/part_b":/data/part_b:ro -v "$SEC2/branch_ticket_b":/data/branch_ticket_b:ro
+RUN_D02 tsb-d02-pack 10.66.0.49 /app-d02/svc_pack.py \
+  -v "$SEC2/part_c":/data/part_c:ro -v "$SEC2/branch_ticket_c":/data/branch_ticket_c:ro
 
 # VPN 服务端
 docker run -d --name tsb-vpn --network tsb-lab --ip 10.66.0.10 \

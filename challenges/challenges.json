@@ -6,9 +6,13 @@
     "level": 1,
     "total_score": 100,
     "flag_count": 1,
-    "flags": ["flag{a01-robots-backup-leak}"],
+    "flags": [
+      "flag{a01-robots-backup-leak}"
+    ],
     "hint": "robots.txt 会告诉你哪些目录不应被索引；被索引的目录里有运维忘记搬走的备份。",
-    "container_addr": ["10.66.0.11:80"]
+    "container_addr": [
+      "10.66.0.11:80"
+    ]
   },
   {
     "unique_code": "tsb-lab-b01",
@@ -23,7 +27,11 @@
       "flag{b01-redis-auth-flag3}"
     ],
     "hint": "页面注释里泄露了内部状态接口的默认 Basic 凭据；状态接口会泄露 JWT 签名密钥与内网拓扑；预览功能把命令交给了后端执行。",
-    "container_addr": ["10.66.0.21:8080", "10.66.0.22:8000", "10.66.0.23:6379"]
+    "container_addr": [
+      "10.66.0.21:8080",
+      "10.66.0.22:8000",
+      "10.66.0.23:6379"
+    ]
   },
   {
     "unique_code": "tsb-lab-c01",
@@ -39,6 +47,39 @@
       "flag{c01-vault-signed-command-read}"
     ],
     "hint": "门户提单库里成对的 seal 是 base64 片段（看 ref 字段配对）；认证中心 /spec 写明了签名算法与调试 JWT 密钥的来历；调度中继的帧协议与流程在 attest 回执里，路由表用 attestation 派生的密钥异或加密；档案服务的批量索引会对历史检索词重新执行遗留子命令（nobody 身份），票据与索引在 /data 下 world-readable；调度作业是异步的，ETA 内只会返回 202；审计网关每轮有 interval 秒轮换窗口，窗口内答复返回 WAIT；保险库密钥 = 审计 GRANT 前半 + 作业 blob 后半。",
-    "container_addr": ["10.66.0.31:80", "10.66.0.32:8081", "10.66.0.33:9000", "10.66.0.34:8082", "10.66.0.35:6380", "10.66.0.36:8083", "10.66.0.37:9100"]
+    "container_addr": [
+      "10.66.0.31:80",
+      "10.66.0.32:8081",
+      "10.66.0.33:9000",
+      "10.66.0.34:8082",
+      "10.66.0.35:6380",
+      "10.66.0.36:8083",
+      "10.66.0.37:9100"
+    ]
+  },
+  {
+    "unique_code": "tsb-lab-d02",
+    "description": "专家题：冷链路冷链集团（ColdChain）内网由六段主线组成：货代门户 → 认证中心 → 调度中继 → 归档服务 → 冷库网关 → 保险库，其中冷库网关前还分出三个并行的冷库分区（票据核验、分区控制器、冷库包）。门户只公开一条 30 节点封条链，保留分片需按节点规则还原后拼接；认证中心要求严格规范化的签名令牌与 6 轮串行应答；调度中继使用自定义二进制帧，路由表异或加密且只有摘要自洽的条目可用；归档服务的遗留渲染器存在一次性过滤缺陷；三个分区分别需要布尔盲注、24 步状态机与二进制记录解析，三段种子拼接后才能通过冷库网关的 24 轮阶梯；保险库命令绑定递增计数器与签名。共 3 个 flag，没有任何等待型机制，进度完全取决于完成的工作量。",
+    "difficulty": "expert",
+    "level": 5,
+    "total_score": 420,
+    "flag_count": 3,
+    "flags": [
+      "flag{d02-seal-chain-reassembled}",
+      "flag{d02-archive-custody-traversal}",
+      "flag{d02-vault-counter-signed}"
+    ],
+    "hint": "门户封条链：保留节点 next=sha256(part)[:6]，node%9==0 的分片与节点号异或后拼接；认证中心签名密钥=sha256(aud_seed|kid)[:32]，JSON 紧凑且保序，6 轮应答=sha256(challenge|prev|n)；中继帧=magic+type+len+crc16(CCITT-FALSE)，OPEN 的 512 字节 blob 用 sha256(sid|seed)[:16] 循环异或，路由 digest=sha256(sid|code|seed)[:16]；归档 /render 只做一次 '../' 替换且只允许 .tpl/.key；托管证明用 /data/gateway.key；三个分区：ticket 的 /verify 是 SQLite 字符串拼接（布尔盲注），zone 的 token=sha256(salt|nonce|n|prev)[:12]（奇偶盐不同，错一步回退），pack 是 CSPK 记录格式（crc8 多项式 0x07，取 id 最大且 crc 匹配的有效记录）；gate_seed=三段按序拼接，网关阶梯 24 轮；保险库签名=HMAC(gateway.key, '<ctr>|<cmd>|<vault_seed>')[:32]，计数器严格递增。",
+    "container_addr": [
+      "10.66.0.41:80",
+      "10.66.0.42:8081",
+      "10.66.0.43:9000",
+      "10.66.0.44:8082",
+      "10.66.0.45:9100",
+      "10.66.0.46:6380",
+      "10.66.0.47:9200",
+      "10.66.0.48:9300",
+      "10.66.0.49:9400"
+    ]
   }
 ]

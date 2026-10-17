@@ -57,7 +57,7 @@ check('缺 token → 401', s == 401)
 
 # ---- list 字段完整性（与 client.js CHALLENGE_FIELDS 一致） ----
 s, b = call('GET', '/openapi/v1/challenges')
-check('list → 三题', s == 200 and isinstance(b, list) and len(b) == 3)
+check('list → 四题', s == 200 and isinstance(b, list) and len(b) == 4)
 item = next(x for x in b if x['unique_code'] == 'tsb-lab-a01')
 for field in ['unique_code', 'description', 'difficulty', 'level', 'total_score',
               'flag_count', 'correct_flag_count', 'is_completed', 'container_status', 'container_addr']:
@@ -122,6 +122,29 @@ check('list 显示 c01 完成', item['is_completed'] is True and item['correct_f
       and item['total_score'] == 400 and item['container_status'] == 'available')
 s, b = call('POST', '/openapi/v1/challenges/close?unique_code=tsb-lab-c01')
 check('c01 close', s == 200 and b == {'unique_code': 'tsb-lab-c01', 'closed': True})
+
+# ---- d02 全流程（3 flag 满分，未用提示） ----
+D02 = DEFS['tsb-lab-d02']
+s, b = call('POST', '/openapi/v1/challenges/start?unique_code=tsb-lab-d02')
+check('d02 start 返回九个地址', s == 200 and b['unique_code'] == 'tsb-lab-d02'
+      and b['container_addr'] == ['10.66.0.41:80', '10.66.0.42:8081',
+                                  '10.66.0.43:9000', '10.66.0.44:8082',
+                                  '10.66.0.45:9100', '10.66.0.46:6380',
+                                  '10.66.0.47:9200', '10.66.0.48:9300',
+                                  '10.66.0.49:9400'])
+total = 0
+for i, flag in enumerate(D02['flags'], 1):
+    s, b = call('POST', '/openapi/v1/challenges/submit', body={'unique_code': 'tsb-lab-d02', 'flag': flag})
+    total += 140
+    check(f'd02 flag{i} 计分', s == 200 and b['correct'] is True and b['awarded'] == 140
+          and b['cumulative_score'] == total and b['correct_flag_count'] == i
+          and b['total_flag_count'] == 3)
+s, b = call('GET', '/openapi/v1/challenges')
+item = next(x for x in b if x['unique_code'] == 'tsb-lab-d02')
+check('list 显示 d02 完成', item['is_completed'] is True and item['correct_flag_count'] == 3
+      and item['total_score'] == 420 and item['container_status'] == 'available')
+s, b = call('POST', '/openapi/v1/challenges/close?unique_code=tsb-lab-d02')
+check('d02 close', s == 200 and b == {'unique_code': 'tsb-lab-d02', 'closed': True})
 
 # ---- 参数校验 ----
 s, b = call('POST', '/openapi/v1/challenges/submit', body={'unique_code': 'tsb-lab-b01'})

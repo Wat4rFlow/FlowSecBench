@@ -10,3 +10,6 @@ __pycache__/
 .env
 .DS_Store
 .playwright-cli/
+
+# 本地临时 secrets（禁止入库）
+.tmp-*/
