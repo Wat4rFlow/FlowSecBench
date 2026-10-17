@@ -615,26 +615,27 @@ sock.close()
 gate_seed = part_a + part_b + part_c
 check('d02 三段种子拼接（60 位）', len(gate_seed) == 60)
 
-# 跳5：网关 24 轮 HMAC 阶梯 → 保险库地址与种子
+# 跳5：网关 12 轮 HMAC 阶梯 → 保险库地址与种子
 sock = socket.create_connection(('10.66.0.45', 9100), timeout=10)
 reader = sock.makefile('rb')
+reader.readline()
 reader.readline()
 reader.readline()
 sock.sendall(f'HELLO {gate_seed}\r\n'.encode())
 line = reader.readline().decode('utf-8', 'replace').strip()
 parts = line.split()
-check('d02 网关进入 24 轮阶梯', parts and parts[0] == '+LADDER' and parts[2] == '24', line)
+check('d02 网关进入 12 轮阶梯', parts and parts[0] == '+LADDER' and parts[2] == '12', line)
 gate_token = parts[1]
 gate_key = gateway_key.encode()
 prev = gate_seed
 vault_seed = ''
-for n in range(1, 25):
+for n in range(1, 13):
     answer = hmac.new(gate_key, f'{gate_token}|{n}|{prev}'.encode(),
                       hashlib.sha256).hexdigest()[:16]
     sock.sendall(f'R {n} {answer}\r\n'.encode())
     line = reader.readline().decode('utf-8', 'replace').strip()
     prev = answer
-    if n < 24:
+    if n < 12:
         check(f'd02 阶梯第 {n} 轮', line == f'+OK {n + 1}', line)
     else:
         grant_line = line.split()

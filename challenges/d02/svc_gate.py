@@ -6,8 +6,9 @@
   R <n> <answer>                    → +OK <n+1>（共 12 轮）
   SIGN <ctr> <cmd>                  → +SIG <sig>（仅 GRANT 后）
 
-answer_n = HMAC-SHA256(gateway.key, "<token>|<n>|<answer_{n-1}>") 前 16 位，
-answer_0 = gate_seed。全 12 轮通过才下发保险库地址与种子。仅标准库。
+answer_n = HMAC-SHA256(gateway.key, <message>) 的前 16 位十六进制；
+消息布局不在服务内明文（仅提示原语与截断长度），
+answer_0 = gate_seed。全部轮次通过才下发保险库地址与种子。仅标准库。
 """
 import hashlib
 import hmac
@@ -22,9 +23,11 @@ GATEWAY_KEY = open(os.path.join(DATA, 'gateway.key'), encoding='utf-8').read().s
 GATE_SEED = open(os.path.join(DATA, 'gate_seed'), encoding='utf-8').read().strip()
 VAULT_SEED = open(os.path.join(DATA, 'vault_seed'), encoding='utf-8').read().strip()
 VAULT_ADDR = '10.66.0.46:6380'
-ROUNDS = 24
+ROUNDS = 12
 
-BANNER = b'+HELLO GATE1\r\n+NEED SEED\r\n'
+BANNER = (b'+HELLO GATE1\r\n+NEED SEED\r\n'
+          b'+RULE answer = HMAC-SHA256(gateway_key, message) hex[:16]; '
+          b'message layout is NOT documented\r\n')
 
 
 def ladder_answer(token: str, n: int, prev: str) -> str:
